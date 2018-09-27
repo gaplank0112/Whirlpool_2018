@@ -26,6 +26,14 @@ def main(work_resource):
         debug_obj.trace(low,'  No available resources. Skipping this prioritization')
         return
 
+    # -- Create a sorted list of items on back order. This is used to prioritize inbound shipments waiting for unload
+    back_order_list = []
+    for site_product in site_obj.products:
+        if site_product.currentorderquantity > 0.0:
+            back_order_list.append((site_product.product.name, site_product.currentorderquantity))
+    back_order_sort = sorted(back_order_list, key=lambda a: a[1], reverse=True)  # -- Sort by the second element in the tuple
+    debug_obj.trace(low,'TESTING DELETE sorted back orders %s' % back_order_sort)
+
     if len(consumer_queue) > 0:
         try:
             open_booleans = is_open_dict[site_obj.name]
@@ -47,6 +55,7 @@ def main(work_resource):
         # -- NOTE: A hard sequence provided here but allows the user to change the sequence later
         sequence = []
         filtered_queue = prioritize_queue('FDC', filtered_queue, sequence)
+        # filtered_queue = filtered_queue.sort(priority, longest_time_in_queue)
 
         if len(filtered_queue) > 0:
             debug_obj.trace(low, '\n  Releasing items from the filtered/prioritized queue')
@@ -158,9 +167,10 @@ def check_delivery_open(shipment_type, consumer, is_open_dict, work_resource):
 
 
 def prioritize_queue(site_type, queue, sequence):
+    # create a list of all items on backorder
     # check the item for priority already attached
     # walk through the sequence. Determine which index applies.
-    # add to priority field
+    # add to priority field.
 
     return queue
 

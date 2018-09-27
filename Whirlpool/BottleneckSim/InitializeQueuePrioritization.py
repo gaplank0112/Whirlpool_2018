@@ -43,6 +43,16 @@ def main():
             mode.constraintcheckscript = 'WorkResourceConstraint'
             debug_obj.trace(high,' Set mode constraint check for lane %s mode %s'
                             % (lane.name, mode.name))
+            average_transit_time = get_avg_transit_time(mode)
+            mode.setcustomattribute('AverageTransitTime', average_transit_time)
+            debug_obj.trace(low, '   DELETE avg trans time %s' % (float(average_transit_time)/86400.0))
 
     utilities.profile_stats('InitializeQueuePrioritization', script_start, datetime.datetime.now())
 
+
+def get_avg_transit_time(mode_obj):
+    transit_time = 0.0
+    for i in range(1000):
+        transit_time += float(mode_obj.transportationtime.valueinseconds)
+
+    return transit_time / 1000.0
