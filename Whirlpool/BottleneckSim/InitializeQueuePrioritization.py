@@ -69,6 +69,6 @@ def get_avg_transit_time(mode_obj):
 
 def set_outbound_queue_priority():
     # -- Sort the queue by the prioritization sequence # TODO: Allow input from a global variable
-    outbound_priority_dict = {'RDC': [['HMDPT', 'LOWES', 'BESTB'], ['_LDC'],['_OTHER']],
+    outbound_priority_dict = {'RDC': [['HMDPT'], ['_LDC'],['_OTHER', 'LOWES', 'BESTB']],
                               'FDC': [['SEARS', 'LOWES', 'BESTB'], ['OTHER'], ['_RDC']]}
     model_obj.setcustomattribute('OutboundQueuePriority', outbound_priority_dict)
