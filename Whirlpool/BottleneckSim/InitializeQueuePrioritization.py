@@ -21,13 +21,12 @@ def main():
     script_start = datetime.datetime.now()
     sim_server.AddPythonScript('QueuePrioritization', 'main')
     sim_server.AddPythonScript('WorkResourceConstraint', 'main')
-    debug_obj.trace(high, 'Added python script ')
 
     sites = sim_server.Model().sites
     lanes = sim_server.Model().lanes
     sched_time = datetime.datetime.utcfromtimestamp(sim_server.Now()) + datetime.timedelta(seconds=1)
     sched_time_str = utilities.str_datetime(sched_time)
-    debug_obj.trace(low,'DELETE sched time %s, str %s' % (sched_time,sched_time_str))
+
     for site in sites:
         # For each site with a work resource, we need to set a queue review at the next opening hour.
         for work_resource in site.workresources:
@@ -39,13 +38,23 @@ def main():
                            % (site.name, work_resource.name, work_resource.queuereviewpolicy,
                               work_resource.queuereviewscript))
     for lane in lanes:
+        weighted_average_trans_time = 0.0
         for mode in lane.modes:
             mode.constraintcheckscript = 'WorkResourceConstraint'
             debug_obj.trace(high,' Set mode constraint check for lane %s mode %s'
                             % (lane.name, mode.name))
+            # -- We calculate the average transit time by running the distribution 1000 times. This is needed for
+            # -- our 'is the site open for delivery' calculations
             average_transit_time = get_avg_transit_time(mode)
             mode.setcustomattribute('AverageTransitTime', average_transit_time)
-            debug_obj.trace(low, '   DELETE avg trans time %s' % (float(average_transit_time)/86400.0))
+            debug_obj.trace(low, '   Average trans time %s, mode %s, mode parameter(weight) %s' %
+                            ((float(average_transit_time)/86400.0), mode.name, mode.modeparameter))
+            weighted_average_trans_time += average_transit_time * (mode.modeparameter / 100)
+        lane.setcustomattribute('WgtAvgTransTime', weighted_average_trans_time)
+        debug_obj.trace(low, '   Weighted Average trans time for lane %s = %s \n' %
+                        (lane.name, float(weighted_average_trans_time) / 86400.0))
+
+    set_outbound_queue_priority()
 
     utilities.profile_stats('InitializeQueuePrioritization', script_start, datetime.datetime.now())
 
@@ -55,4 +64,11 @@ def get_avg_transit_time(mode_obj):
     for i in range(1000):
         transit_time += float(mode_obj.transportationtime.valueinseconds)
 
+
     return transit_time / 1000.0
+
+def set_outbound_queue_priority():
+    # -- Sort the queue by the prioritization sequence # TODO: Allow input from a global variable
+    outbound_priority_dict = {'RDC': [['HMDPT', 'LOWES', 'BESTB'], ['_LDC'],['_OTHER']],
+                              'FDC': [['SEARS', 'LOWES', 'BESTB'], ['OTHER'], ['_RDC']]}
+    model_obj.setcustomattribute('OutboundQueuePriority', outbound_priority_dict)

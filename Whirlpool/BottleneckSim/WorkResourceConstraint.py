@@ -1,7 +1,6 @@
 import sys
 import sim_server
 import datetime
-
 sys.path.append("C:\Python26\SCG_64\Lib")
 
 low, med, high = 2, 2, 2

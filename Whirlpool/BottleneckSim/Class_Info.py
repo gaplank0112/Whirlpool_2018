@@ -10,7 +10,7 @@ import sim_server
 import datetime
 import utilities
 
-low, med, high = 2, 5, 8
+low, med, high = 2, 5, 10
 debug_obj = sim_server.Debug()
 model_obj = sim_server.Model()
 

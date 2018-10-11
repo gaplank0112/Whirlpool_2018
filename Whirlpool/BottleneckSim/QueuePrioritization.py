@@ -15,6 +15,7 @@ def main(work_resource):
     script_start = datetime.datetime.now()
     # -- Set up a temporary container to hold results of is_open queries to avoid looping multiple times
     is_open_dict = {}
+    back_order_sort = []
     site_obj = work_resource.owner
     consumer_queue = work_resource.waitingconsumerqueue
     debug_obj.trace(low, ' At site %s, resource name %s' % (site_obj.name, work_resource.name))
@@ -26,36 +27,20 @@ def main(work_resource):
         debug_obj.trace(low,'  No available resources. Skipping this prioritization')
         return
 
-    # -- Create a sorted list of items on back order. This is used to prioritize inbound shipments waiting for unload
-    back_order_list = []
-    for site_product in site_obj.products:
-        if site_product.currentorderquantity > 0.0:
-            back_order_list.append((site_product.product.name, site_product.currentorderquantity))
-    back_order_sort = sorted(back_order_list, key=lambda a: a[1], reverse=True)  # -- Sort by the second element in the tuple
-    debug_obj.trace(low,'TESTING DELETE sorted back orders %s' % back_order_sort)
-
     if len(consumer_queue) > 0:
-        try:
-            open_booleans = is_open_dict[site_obj.name]
-            is_open_receiving, is_open_shipping = open_booleans[0], open_booleans[1]
-        except:
-            is_open_receiving, is_open_shipping = open_hours(site_obj,
-                                                             datetime.datetime.utcfromtimestamp(sim_server.Now()))
-            # -- Add the results of the is_open query to the dictionary
-            is_open_dict[site_obj.name] = (is_open_receiving, is_open_receiving)
-        debug_obj.trace(med, '   Site is open receiving = %s, is open shipping = %s /n'
-                        % (is_open_receiving, is_open_shipping))
+        is_open_receiving, is_open_shipping = check_for_open(is_open_dict, site_obj)
         if is_open_shipping == False and is_open_receiving == False:
             return # -- The site is closed so no reason to prioritize anything now.
 
-        # -- Filter out any items that can not be released
+        if is_open_receiving is True:
+            # -- Create a sorted list of items on back order to prioritize inbound shipments waiting for unload
+            back_order_sort = get_back_order_list(site_obj)
+            debug_obj.trace(high, '  Sorted back orders %s' % back_order_sort)
+
+        # -- Filter out any items that can not be released because of open windows
         filtered_queue = filter_consumer_queue(consumer_queue, is_open_receiving, is_open_shipping,
                                                is_open_dict, work_resource)
-        # -- Sort the queue by the prioritization sequence
-        # -- NOTE: A hard sequence provided here but allows the user to change the sequence later
-        sequence = []
-        filtered_queue = prioritize_queue('FDC', filtered_queue, sequence)
-        # filtered_queue = filtered_queue.sort(priority, longest_time_in_queue)
+        filtered_queue = prioritize_queue(filtered_queue, back_order_sort)
 
         if len(filtered_queue) > 0:
             debug_obj.trace(low, '\n  Releasing items from the filtered/prioritized queue')
@@ -74,6 +59,31 @@ def main(work_resource):
     utilities.profile_stats('QueuePrioritization', script_start, datetime.datetime.now())
 
 
+def check_for_open(is_open_dict, site_obj):
+    # -- Check to see if we have already looked at the opening hours for this site and use them.
+    # -- If not, check for open hours and then add them to the dictionary for later
+    try:
+        open_booleans = is_open_dict[site_obj.name]
+        is_open_receiving, is_open_shipping = open_booleans[0], open_booleans[1]
+    except:
+        is_open_receiving, is_open_shipping = \
+            open_hours(site_obj, datetime.datetime.utcfromtimestamp(sim_server.Now()))
+        # -- Add the results of the is_open query to the dictionary
+        is_open_dict[site_obj.name] = (is_open_receiving, is_open_receiving)
+    debug_obj.trace(med, '   Site is open receiving = %s, is open shipping = %s \n'
+                    % (is_open_receiving, is_open_shipping))
+    return is_open_receiving, is_open_shipping
+
+
+def get_back_order_list(site_obj):
+    back_order_list = []
+    for site_product in site_obj.products:
+        if site_product.currentorderquantity > 0.0:
+            back_order_list.append((site_product.product.name, site_product.currentorderquantity))
+    back_order_sort = sorted(back_order_list, key=lambda a: a[1],
+                             reverse=True)  # -- Sort by the second element in the tuple
+    return back_order_sort
+
 
 def open_hours(site_obj, time_check):
     # is the site open for receiving? If not, remove all inbound shipments
@@ -90,34 +100,61 @@ def open_hours(site_obj, time_check):
 
 
 def filter_consumer_queue(queue, open_receiving, open_shipping, is_open_dict, work_resource):
-    prioritization_queue = []
-    # is the site open for receiving? If not, remove all inbound shipments
+    debug_obj.trace(low,'  Filtering Queue')
+    filter_queue = []
+
+    # -- Go through each criteria and determine if the condition is True or False or None (does not apply)
     for consumer in queue:
-        debug_obj.trace(med,' Evaluating queued item type %s' % consumer.objecttype)
         shipment_type = get_shipment_type(consumer)
         debug_obj.trace(med, '  Shipment type %s, origin %s, destination %s'
                         % (shipment_type, consumer.items[0].orderfromname, consumer.items[0].shiptoname))
-        add_item = []
-        add_item.append(check_for_objecttype(consumer))
-        add_item.append(check_receiving_open(shipment_type, open_receiving))
-        add_item.append(check_open_outbound(shipment_type, open_shipping))
-        add_item.append(check_delivery_open(shipment_type, consumer, is_open_dict, work_resource))
-        debug_obj.trace(high,'      Type=Shipment? %s | IB:source recv open? %s | OB:source ship open? %s | '
-                             'OB:open at delivery? %s' % (add_item[0], add_item[1], add_item[2], add_item[3]))
-        add_item = [x for x in add_item if x is not None] # remove any None items from the True/False list
 
-        if all(add_item): #if everything is True, add the item
-            prioritization_queue.append(consumer)
+        # -- If this item was previously reviewed at the same time stamp, nothing would have changed. Therefore,
+        # -- just pass this through to the filtered queue
+        previously_reviewed, filter_value, sort_priority = check_previous_review(consumer)
 
-    return prioritization_queue
+        if previously_reviewed is True:
+            add_item = [filter_value]
+        else:
+            add_item = []
+            # -- Is the consumer item a shipment?
+            add_item.append(check_for_objecttype(consumer))
+            # -- If the shipment is an inbound shipment, is the site open for receiving
+            add_item.append(check_receiving_open(shipment_type, open_receiving))
+            # -- If the shipment is an outbound shipment, is the site open for shipping
+            add_item.append(check_open_outbound(shipment_type, open_shipping))
+            # -- If the shipment is an outbound shipment, are we within a shipping window for the destination
+            add_item.append(check_delivery_open(shipment_type, consumer, is_open_dict, work_resource))
+            debug_obj.trace(high,'      Type=Shipment? %s | IB:source recv open? %s | OB:source ship open? %s | '
+                                 'OB:open at delivery? %s' % (add_item[0], add_item[1], add_item[2], add_item[3]))
+            add_item = [x for x in add_item if x is not None] # remove any None items from the True/False list
+            consumer.custom2 = utilities.str_datetime(datetime.datetime.utcfromtimestamp(sim_server.Now())) + '|' +\
+                               str(all(add_item)) + '|' + '0.0'
 
+        if all(add_item): # -- If everything is True, add the item to the list of items that can be released
+            filter_queue.append(consumer)
+    debug_obj.trace(low,'TURN TO HIGH Filtered Queue: %s' % filter_queue)
+    return filter_queue
+
+
+def check_previous_review(consumer):
+    # -- The custom2 field is separated into Last date reviewed | Filter value | Sort Priority
+    review_data = consumer.custom2.split('|')
+
+    if review_data[0] == sim_server.NowAsString():  # -- We have already reviewed this once at this timestamp
+        debug_obj.trace(low,'DELETE Previous check True  %s' % consumer.custom2)
+        return True, review_data[1], review_data[2]
+    else:
+        debug_obj.trace(low,'DELETE Previous check False %s' % consumer.custom2)
+    return False, False, 0.0
 
 def get_shipment_type(consumer):
-    if consumer.custom1:  # we tag inbound items as they arrive. If the item isn't tagged, it must an outbound
-        shipment_type = consumer.custom1
+    if consumer.custom1:  # we tag inbound shipments as they arrive. If the item isn't tagged, it must an outbound
+        shipment_data = consumer.custom1
+        shipment_type, date_in_queue = shipment_data.split('|')
     else:
         shipment_type = 'OB'
-        consumer.custom1 = shipment_type
+        consumer.custom1 = shipment_type + '|' + sim_server.NowAsString()
     return shipment_type
 
 
@@ -145,6 +182,8 @@ def check_open_outbound(shipment_type, is_open_shipping):
 
 
 def check_delivery_open(shipment_type, consumer, is_open_dict, work_resource):
+    # TODO: use the 'weighted averaage transportation time' instead of trans lead time.
+    # TODO: Anything over 12 hours transportation time can be released at any time.
     if shipment_type == 'OB':
         site_obj = consumer.items[0].shipto
         try:
@@ -152,13 +191,18 @@ def check_delivery_open(shipment_type, consumer, is_open_dict, work_resource):
             is_open_receiving, is_open_shipping = open_booleans[0], open_booleans[1]
         except:
             # -- Calculate the expected delivery date as current time + transit time from Drop Processing Order table
-            transit_time = 48.0
-            # TODO: transit_time = site_obj.getcustomattribute('Transit_Time')
+            origin = consumer.items[0].orderfrom
+            destination = consumer.items[0].shipto
+            lane_obj = utilities.get_lane(origin,destination)
+            transit_time_hours = float(lane_obj.getcustomattribute('WgtAvgTransTime')/ 86400.0)
+            debug_obj.trace(med,'    Weighted avg transit time = %s' % transit_time_hours)
             expected_delivery = datetime.datetime.utcfromtimestamp(sim_server.Now()) + \
-                                datetime.timedelta(hours=transit_time)
+                                datetime.timedelta(hours=transit_time_hours)
             is_open_receiving, is_open_shipping = open_hours(site_obj, expected_delivery)
+            if transit_time_hours > 12.0:
+                is_open_receiving = True
             # -- Add the results of the is_open query to the dictionary
-            is_open_dict[site_obj.name] = (is_open_receiving, is_open_receiving)
+            is_open_dict[site_obj.name] = (is_open_receiving, is_open_shipping)
 
             if is_open_receiving is False: # -- We need to schedule a resource check when the receive window opens
                 schedule_resource_check(site_obj, expected_delivery, work_resource)
@@ -166,13 +210,110 @@ def check_delivery_open(shipment_type, consumer, is_open_dict, work_resource):
         return is_open_receiving
 
 
-def prioritize_queue(site_type, queue, sequence):
-    # create a list of all items on backorder
-    # check the item for priority already attached
-    # walk through the sequence. Determine which index applies.
-    # add to priority field.
+def prioritize_queue(queue, back_order_list):
+    debug_obj.trace(low,'  Prioritizing Queue')
+    for consumer in queue:
+        previously_reviewed, filter_value, sort_priority = check_previous_review(consumer)
 
-    return queue
+        if previously_reviewed is True and sort_priority != '0.0':
+            debug_obj.trace(low,'    DELETE Check previously reviewed sort priority %s' % sort_priority)
+            consumer.setcustomattribute('queue_priority',sort_priority)
+        else:
+            # -- Set the base priority based on the type of shipment
+            if get_shipment_type(consumer) == 'OB':
+                sort_priority = '1'
+                second_priority = get_OB_secondary_priority(consumer)
+                sort_priority += second_priority
+            else:
+                sort_priority = '2'
+                second_priority = get_IB_secondary_priority(back_order_list, consumer)
+                sort_priority += second_priority
+            # -- Add the time in the queue
+            seconds_in_queue = get_seconds_in_queue(consumer)
+            sort_seconds = 99999999 - seconds_in_queue
+            sort_priority += '.' + ('00000000' + str(sort_seconds))[-8:]
+
+            consumer.setcustomattribute('queue_priority',sort_priority)
+            # -- We record the sort priority so we can skip this review later if the the review is at the
+            # -- same time stamp
+            consumer.custom2 = consumer.custom2.replace('|0.0','|' + str(sort_priority))
+
+    sorted_queue = sorted(queue, key=lambda x: x.getcustomattribute('queue_priority'))
+
+    debug_obj.trace(low,'--------------- %s  ----------------' % sim_server.NowAsString(), 'priority.txt')
+    for item in sorted_queue:
+        debug_obj.trace(low, '    Sorted Queue item: %s, %s, %s, %s' % (item.getcustomattribute('queue_priority'),
+                                                 item.id,
+                                             item.items[0].orderfromname,
+                                             item.items[0].finaldestinationname))
+        debug_obj.trace(low, '%s, %s, %s, %s' % (item.getcustomattribute('queue_priority'),
+                                                 item.id,
+                                             item.items[0].orderfromname,
+                                             item.items[0].finaldestinationname), 'priority.txt')
+
+    return sorted_queue
+
+
+def get_seconds_in_queue(consumer):
+    '''
+    When a shipment arrives, we put the date arrived in custom 1 field element 1
+    When an order is dropped, we put the drop date in custom 1 field element 1
+    Subtract now time from the time started in queue. Concatenate the results onto the sort priority
+    after the decimal point. This ensures a sort for items in the queue the longest.
+    '''
+    consumer_data = consumer.custom1
+    shipment_type, date_in_queue = consumer_data.split('|')
+    date_in_queue_datetime = datetime.datetime.strptime(date_in_queue, '%m/%d/%Y %H:%M:%S')
+    time_in_queue = datetime.datetime.utcfromtimestamp(sim_server.Now()) - date_in_queue_datetime
+    seconds_in_queue = utilities.total_seconds(time_in_queue)
+    debug_obj.trace(high, '     Time start in queue, Now, Total Seconds %s, %s, %s' %
+                    (date_in_queue, sim_server.NowAsString(), seconds_in_queue))
+    return seconds_in_queue
+
+
+def get_IB_secondary_priority(back_order_list, consumer):
+    # -- Set the secondary IB priority based on whether the item is on backorder
+    # -- Evaluate each item on the shipment. If any one of them is on backorder, add the index priority
+    # -- to the highest index
+    second_priority = 9999
+    for item in consumer.items:
+        for detail in item.details:
+            debug_obj.trace(low, 'CHANGE TO HIGH Prioritizaion - Ship Type, ProductName, Back Order list '
+                                 'IB, %s, %s' % (detail.productname, back_order_list))
+            index_sort = [i for i, v in enumerate(back_order_list) if v[0] == detail.productname]
+            '''
+            Explained in words: For each i, v in a enumerated list of back_order_list (that makes i the
+            element's position in the enumerated list and v the original tuple) check if the tuple's
+            first element is the product name, if so, append the result of the code before 'for' to a
+            newly created list, here: i.
+            '''
+            if len(index_sort) == 0:
+                # -- Product not on back order
+                continue
+            elif index_sort[0] < second_priority:
+                second_priority = index_sort[0]
+        second_priority = ('0000' + str(second_priority))[-4:]
+    return second_priority
+
+
+def get_OB_secondary_priority(consumer):
+    # -- Set the secondary OB priority based on the destination
+    # -- Currently hard coded but ideally will accept input
+    second_priority = '9999'
+    item = consumer.items[0]
+    source_type = item.orderfrom.custom1
+    destination_name = item.shiptoname
+    obqp = model_obj.getcustomattribute('OutboundQueuePriority')
+    priority_list = obqp[source_type]
+    debug_obj.trace(low, 'CHANGE TO HIGH Prioritization - Ship Type, SourceType, Destination, Priority '
+                         'OB, %s, %s, %s' % (source_type, destination_name, priority_list))
+    for index, pri_list in enumerate(priority_list):
+        for element in pri_list:
+            debug_obj.trace(low, 'DELETE index, element  %s, %s, %s' % (index, element, destination_name))
+            if element in destination_name:
+                second_priority = ('0000' + str(index))[-4:]
+                break
+    return second_priority
 
 
 def schedule_resource_check(destination_obj, earliest_delivery, work_resource):
