@@ -22,7 +22,7 @@ import datetime
 import utilities
 from Class_Info import BusinessHours
 
-low, med, high = 2, 5, 8
+low, med, high = 2, 5, 9
 debug_obj = sim_server.Debug()
 model_obj = sim_server.Model()
 
