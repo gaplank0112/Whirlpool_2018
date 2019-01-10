@@ -56,6 +56,7 @@ def main(work_resource):
         else:
             debug_obj.trace(low, '\n  No items to release from the filtered/prioritized queue')
 
+    # -- Collect usage stats of the scripts for profiling
     utilities.profile_stats('QueuePrioritization', script_start, datetime.datetime.now())
 
 
@@ -121,9 +122,9 @@ def filter_consumer_queue(queue, open_receiving, open_shipping, is_open_dict, wo
             add_item.append(check_for_objecttype(consumer))
             # -- If the shipment is an inbound shipment, is the site open for receiving
             add_item.append(check_receiving_open(shipment_type, open_receiving))
-            # -- If the shipment is an outbound shipment, is the site open for shipping
+             # -- If the shipment is an outbound shipment, is the site open for shipping
             add_item.append(check_open_outbound(shipment_type, open_shipping))
-            # -- If the shipment is an outbound shipment, are we within a shipping window for the destination
+             # -- If the shipment is an outbound shipment, are we within a shipping window for the destination
             add_item.append(check_delivery_open(shipment_type, consumer, is_open_dict, work_resource))
             debug_obj.trace(high,'      Type=Shipment? %s | IB:source recv open? %s | OB:source ship open? %s | '
                                  'OB:open at delivery? %s' % (add_item[0], add_item[1], add_item[2], add_item[3]))
@@ -133,20 +134,19 @@ def filter_consumer_queue(queue, open_receiving, open_shipping, is_open_dict, wo
 
         if all(add_item): # -- If everything is True, add the item to the list of items that can be released
             filter_queue.append(consumer)
-    debug_obj.trace(low,'TURN TO HIGH Filtered Queue: %s' % filter_queue)
+    debug_obj.trace(high,'  Filtered Queue: %s' % filter_queue)
     return filter_queue
 
 
 def check_previous_review(consumer):
     # -- The custom2 field is separated into Last date reviewed | Filter value | Sort Priority
     review_data = consumer.custom2.split('|')
+    debug_obj.trace(low,str(review_data))
 
     if review_data[0] == sim_server.NowAsString():  # -- We have already reviewed this once at this timestamp
-        debug_obj.trace(low,'DELETE Previous check True  %s' % consumer.custom2)
         return True, review_data[1], review_data[2]
     else:
-        debug_obj.trace(low,'DELETE Previous check False %s' % consumer.custom2)
-    return False, False, 0.0
+        return False, False, 0.0
 
 def get_shipment_type(consumer):
     if consumer.custom1:  # we tag inbound shipments as they arrive. If the item isn't tagged, it must an outbound
@@ -216,7 +216,6 @@ def prioritize_queue(queue, back_order_list):
         previously_reviewed, filter_value, sort_priority = check_previous_review(consumer)
 
         if previously_reviewed is True and sort_priority != '0.0':
-            debug_obj.trace(low,'    DELETE Check previously reviewed sort priority %s' % sort_priority)
             consumer.setcustomattribute('queue_priority',sort_priority)
         else:
             # -- Set the base priority based on the type of shipment
@@ -278,7 +277,7 @@ def get_IB_secondary_priority(back_order_list, consumer):
     second_priority = 9999
     for item in consumer.items:
         for detail in item.details:
-            debug_obj.trace(low, 'CHANGE TO HIGH Prioritizaion - Ship Type, ProductName, Back Order list '
+            debug_obj.trace(low, '    Prioritizaion - Ship Type, ProductName, Back Order list '
                                  'IB, %s, %s' % (detail.productname, back_order_list))
             index_sort = [i for i, v in enumerate(back_order_list) if v[0] == detail.productname]
             '''
@@ -305,11 +304,10 @@ def get_OB_secondary_priority(consumer):
     destination_name = item.shiptoname
     obqp = model_obj.getcustomattribute('OutboundQueuePriority')
     priority_list = obqp[source_type]
-    debug_obj.trace(low, 'CHANGE TO HIGH Prioritization - Ship Type, SourceType, Destination, Priority '
-                         'OB, %s, %s, %s' % (source_type, destination_name, priority_list))
+    debug_obj.trace(high, '    Prioritization - Ship Type, SourceType, Destination, Priority:'
+                          ' OB, %s, %s, %s' % (source_type, destination_name, priority_list))
     for index, pri_list in enumerate(priority_list):
         for element in pri_list:
-            debug_obj.trace(low, 'DELETE index, element  %s, %s, %s' % (index, element, destination_name))
             if element in destination_name:
                 second_priority = ('0000' + str(index))[-4:]
                 break

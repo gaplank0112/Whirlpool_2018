@@ -10,6 +10,7 @@ model_obj = sim_server.Model()
 def main():
     debug_obj.trace(low,'-'*30)
     debug_obj.trace(low,'End Model called at ' + sim_server.NowAsString())
+    debug_obj.logerror('Message: End Model called at ' + sim_server.NowAsString())
     debug_obj.trace(low," ")
     profile_dict = model_obj.getcustomattribute('ScriptProfiles')
     for k, v in profile_dict.iteritems():

@@ -56,6 +56,7 @@ def main():
 
     set_outbound_queue_priority()
 
+    # -- Collect usage stats of the scripts for profiling
     utilities.profile_stats('InitializeQueuePrioritization', script_start, datetime.datetime.now())
 
 
