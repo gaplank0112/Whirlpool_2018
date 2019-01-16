@@ -84,11 +84,20 @@ def check_daylight_savings(input_datetime):  # TODO: create better lookups for l
     return dst_start <= input_datetime < dst_end
 
 
-def get_lane(origin_object, destination_object):
+def get_lane(origin_object, destination_object, product_name):
     origin_name = origin_object.name
     destination_name = destination_object.name
-    lane_name = origin_name + '_'+destination_name + '_'
-    lane_obj = sim_server.Lane(lane_name)
+    debug_obj.trace(low,origin_name+" "+destination_name+" "+product_name)
+    try:
+        lane_name = origin_name + '_' + destination_name + '_' + product_name
+        lane_obj = sim_server.Lane(lane_name)
+    except:
+        try:
+            lane_name = origin_name + '_'+destination_name + '_(ALL_PRODUCTS)'
+            lane_obj = sim_server.Lane(lane_name)
+        except:
+            lane_name = origin_name + '_'+destination_name + '_'
+            lane_obj = sim_server.Lane(lane_name)
     return lane_obj
 
 

@@ -107,8 +107,9 @@ def filter_consumer_queue(queue, open_receiving, open_shipping, is_open_dict, wo
     # -- Go through each criteria and determine if the condition is True or False or None (does not apply)
     for consumer in queue:
         shipment_type = get_shipment_type(consumer)
-        debug_obj.trace(med, '  Shipment type %s, origin %s, destination %s'
-                        % (shipment_type, consumer.items[0].orderfromname, consumer.items[0].shiptoname))
+        debug_obj.trace(med, '  Shipment type %s, origin %s, destination %s, first product %s'
+                        % (shipment_type, consumer.items[0].orderfromname, consumer.items[0].shiptoname,
+                           consumer.items[0].details[0].productname))
 
         # -- If this item was previously reviewed at the same time stamp, nothing would have changed. Therefore,
         # -- just pass this through to the filtered queue
@@ -193,7 +194,8 @@ def check_delivery_open(shipment_type, consumer, is_open_dict, work_resource):
             # -- Calculate the expected delivery date as current time + transit time from Drop Processing Order table
             origin = consumer.items[0].orderfrom
             destination = consumer.items[0].shipto
-            lane_obj = utilities.get_lane(origin,destination)
+            product_name = consumer.items[0].details[0].productname
+            lane_obj = utilities.get_lane(origin, destination, product_name)
             transit_time_hours = float(lane_obj.getcustomattribute('WgtAvgTransTime')/ 86400.0)
             debug_obj.trace(med,'    Weighted avg transit time = %s' % transit_time_hours)
             expected_delivery = datetime.datetime.utcfromtimestamp(sim_server.Now()) + \
